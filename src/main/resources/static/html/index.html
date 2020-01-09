@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+    <meta charset="utf-8"/>
+
+    <title>Demo Chat</title>
+
+    <link href="../css/bootstrap.css" rel="stylesheet">
+
+    <style>
+        body {
+            padding: 20px;
+        }
+
+        #console {
+            height: 400px;
+            overflow: auto;
+        }
+
+        .username-msg {
+            color: orange;
+        }
+
+        .msg-type {
+            color: deeppink;
+        }
+
+        .connect-msg {
+            color: green;
+        }
+
+        .disconnect-msg {
+            color: red;
+        }
+
+        .send-msg {
+            color: #888
+        }
+    </style>
+
+
+    <script src="https://cdn.bootcss.com/sockjs-client/1.1.4/sockjs.min.js"></script>
+    <script src="https://cdn.bootcss.com/stomp.js/2.3.3/stomp.min.js"></script>
+    <script src="https://cdn.bootcss.com/jquery/3.3.1/jquery.min.js"></script>
+    <script src="../js/moment.min.js"></script>
+
+    <script>
+        var userName;
+        $(function() {
+            userName = 'user' + Math.floor((Math.random() * 1000) + 1);
+            $("#userName").html("您的姓名：" + userName);
+            $(document).keydown(function (e) {
+                if (e.keyCode == 13) {
+                    $('#send').click();
+                }
+            });
+
+            connect();
+        });
+
+        // 将信息打印在页面上
+        function output(message) {
+            var currentTime = "<span class='time'>" + moment().format('HH:mm:ss.SSS') + "</span>";
+            var element = $("<div>" + currentTime + " " + message + "</div>");
+            $('#console').prepend(element);
+        }
+
+        var stompClient = null;
+        //gateway网关的地址
+        var host="http://localhost:8080";
+        function connect() {
+            //地址+端点路径，构建websocket链接地址,注意，对应config配置里的addEndpoint
+            // 这块可以再看下，token用别的方式
+            var socket = new SockJS(host+'/myUrl?token=' + userName);
+            stompClient = Stomp.over(socket);
+            // 连接websocket的服务端，回调函数中是连接成功的处理。
+            // 后面也可增加一个可选的连接失败的回调函数
+            stompClient.connect({}, function(frame) {
+                output('<span class="connect-msg">Client has connected to the server!</span>');
+                console.log('Connected:' + frame);
+                //监听收到公开消息 订阅广播消息
+                stompClient.subscribe('/topic/receiveMsg', function(response) {
+                    // 接收到的对象需要response.body才是后端返回的数据，但都是String。如果后端返回map，需在此转成json格式
+                    var data = JSON.parse(response.body);
+                    var name = data.userName ? ('<span class="username-msg">' + data.userName + ':</span>') : '';
+                    output('<span class="msg-type">['+data.type+']</span>'+name+' ' + data.message);
+                });
+
+                //监听收到大厅人数消息 订阅广播消息
+                stompClient.subscribe('/topic/count', function(response) {
+                    setCount(response.body);
+                });
+                //监听收到大厅人数消息 订阅点对点消息
+                stompClient.subscribe('/user/queue/count', function(response) {
+                    setCount(response.body);
+                });
+                // 向后台获取当前人数
+                stompClient.send("/getCount", {}, "");
+
+                //监听收到私聊消息 订阅点对点消息
+                stompClient.subscribe('/user/queue/sendUser', function(response) {
+                    var data = JSON.parse(response.body);
+                    output('<span class="msg-type">['+data.type+']</span><span class="username-msg">' + data.fromName + '</span>'
+                        + '对<span class="username-msg">' + data.toName + '</span>说：'
+                        + data.message);
+                });
+            });
+        }
+
+        // 设置当前大厅人数及对话列表设置
+        function setCount(body) {
+            var data = JSON.parse(body);
+            $("#count").html(data.count);
+            var selected = $("#total").val();
+            $("#total").html('');
+            $("#total").append('<option value="">所有人</option>');
+            var exist = false;
+            $.each(data.list, function(i, n) {
+                if (n != userName) {
+                    $("#total").append('<option value="'+n+'">'+n+'</option>');
+                    if (selected == n) {
+                        exist = true;
+                    }
+                }
+            });
+
+            if (exist) {
+                $("#total").val(selected);
+            } else if (selected) {
+                alert('用户' + selected + '已离开！');
+            }
+        }
+        function disconnect() {
+            if (stompClient != null) {
+                // 可直接关闭，回调函数可选stompClient.disconnect();
+                stompClient.disconnect(function() {
+                    output('<span class="disconnect-msg">The client has disconnected!</span>');
+                });
+            }
+            console.log("Disconnected");
+        }
+        function sendMessage() {
+            var message = $('#msg').val();
+            $('#msg').val('');
+
+            var selected = $("#total").val();
+            if (!selected || selected == '') {
+                // 发送给所有广播sendTopic的人,客户端发消息，大家都接收，相当于直播说话 注：连接需开启 /topic/sendTopic
+                stompClient.send("/sendAllUser", {}, message);
+            } else {
+                var jsonObject = {
+                    userName: selected,
+                    message: message
+                };
+                // 发送给所有广播sendTopic的人,客户端发消息，大家都接收，相当于直播说话 注：连接需开启 /topic/sendTopic
+                stompClient.send("/sendOneUser", {}, JSON.stringify(jsonObject));
+            }
+
+        }
+    </script>
+</head>
+
+<body>
+
+<h1>SocketJS聊天demo</h1>
+<br/>
+<h2 id="userName"></h2>
+<br/>
+<h5>当前人数：<span id="count"></span>人</h5>
+<br/>
+<div id="console" class="well">
+</div>
+
+<form class="well form-inline" onsubmit="return false;">
+    <span>对</span>
+    <select style="width: 80px;" id="total">
+
+    </select>
+    <span>说：</span>
+    <input id="msg" class="input-xlarge" type="text" placeholder="Type something..."/>
+    <button type="button" onClick="sendMessage()" class="btn" id="send">Send</button>
+    <button type="button" onClick="disconnect()" class="btn" id="conn">Disconnect</button>
+</form>
+</body>
+
+</html>
